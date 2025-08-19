@@ -1,1 +1,131 @@
+name: Build All Platforms (master)
+
+on:
+  workflow_dispatch:   # 手动触发
+  push:
+    branches:
+      - master         # master 分支 push 时触发
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: android
+          - os: ubuntu-latest
+            target: android_tv
+          - os: windows-latest
+            target: windows
+          - os: macos-latest
+            target: macos
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v3
+
+      # --- Android 需要 JDK ---
+      - name: Set up JDK 17
+        if: ${{ matrix.target == 'android' || matrix.target == 'android_tv' }}
+        uses: actions/setup-java@v3
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # --- Flutter 环境 ---
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.22.0'
+          channel: stable
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      # --- Android 签名 ---
+      - name: Decode keystore (Android)
+        if: ${{ matrix.target == 'android' }}
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/app/release.keystore
+
+      - name: Decode keystore (Android TV)
+        if: ${{ matrix.target == 'android_tv' }}
+        run: |
+          echo "${{ secrets.TV_KEYSTORE_BASE64 }}" | base64 -d > android_tv/app/release.keystore
+
+      # --- 构建 ---
+      - name: Build APK (Android)
+        if: ${{ matrix.target == 'android' }}
+        run: flutter build apk --release
+
+      - name: Build APK (Android TV)
+        if: ${{ matrix.target == 'android_tv' }}
+        run: flutter build apk --release -t lib/main_tv.dart
+
+      - name: Build Windows EXE
+        if: ${{ matrix.target == 'windows' }}
+        run: flutter build windows --release
+
+      - name: Build macOS APP (arm64)
+        if: ${{ matrix.target == 'macos' }}
+        run: flutter build macos --release
+
+      # --- 统一重命名产物 ---
+      - name: Rename & Package Android
+        if: ${{ matrix.target == 'android' }}
+        run: |
+          mkdir -p dist
+          APP_NAME=$(basename $(pwd))
+          cp build/app/outputs/flutter-apk/app-release.apk dist/${APP_NAME}-android.apk
+
+      - name: Rename & Package Android TV
+        if: ${{ matrix.target == 'android_tv' }}
+        run: |
+          mkdir -p dist
+          APP_NAME=$(basename $(pwd))
+          cp build/app/outputs/flutter-apk/app-release.apk dist/${APP_NAME}-android-tv.apk
+
+      - name: Rename & Package Windows
+        if: ${{ matrix.target == 'windows' }}
+        run: |
+          mkdir -p dist
+          APP_NAME=$(basename $(pwd))
+          powershell Compress-Archive -Path build/windows/runner/Release/* -DestinationPath dist/${APP_NAME}-windows-x64.zip
+
+      - name: Rename & Package macOS
+        if: ${{ matrix.target == 'macos' }}
+        run: |
+          mkdir -p dist
+          APP_NAME=$(basename $(pwd))
+          zip -r dist/${APP_NAME}-macos-arm64.zip build/macos/Build/Products/Release/*.app
+
+      # --- 上传产物 (Artifacts) ---
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.target }}-build
+          path: dist/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly-${{ github.run_number }}
+          name: "Nightly Build #${{ github.run_number }}"
+          draft: false
+          prerelease: true
+          files: artifacts/**/*.apk
+          files: artifacts/**/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
