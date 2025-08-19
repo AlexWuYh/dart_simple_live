@@ -124,8 +124,10 @@ jobs:
           name: "Nightly Build #${{ github.run_number }}"
           draft: false
           prerelease: true
-          files: artifacts/**/*.apk
-          files: artifacts/**/*.zip
+          files: |
+            artifacts/**/*.apk
+            artifacts/**/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
 
