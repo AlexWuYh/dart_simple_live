@@ -4,7 +4,7 @@ on:
   workflow_dispatch:   # 手动触发
   push:
     branches:
-      - master         # master 分支 push 时触发
+      - master
 
 jobs:
   build:
@@ -34,7 +34,7 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      # --- Flutter 环境 ---
+      # --- Flutter ---
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -43,65 +43,70 @@ jobs:
 
       - name: Flutter pub get
         run: flutter pub get
+        working-directory: app
 
       # --- Android 签名 ---
       - name: Decode keystore (Android)
         if: ${{ matrix.target == 'android' }}
         run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/app/release.keystore
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > app/android/app/release.keystore
 
       - name: Decode keystore (Android TV)
         if: ${{ matrix.target == 'android_tv' }}
         run: |
-          echo "${{ secrets.TV_KEYSTORE_BASE64 }}" | base64 -d > android_tv/app/release.keystore
+          echo "${{ secrets.TV_KEYSTORE_BASE64 }}" | base64 -d > app/android_tv/app/release.keystore
 
       # --- 构建 ---
       - name: Build APK (Android)
         if: ${{ matrix.target == 'android' }}
         run: flutter build apk --release
+        working-directory: app
 
       - name: Build APK (Android TV)
         if: ${{ matrix.target == 'android_tv' }}
         run: flutter build apk --release -t lib/main_tv.dart
+        working-directory: app
 
       - name: Build Windows EXE
         if: ${{ matrix.target == 'windows' }}
         run: flutter build windows --release
+        working-directory: app
 
       - name: Build macOS APP (arm64)
         if: ${{ matrix.target == 'macos' }}
         run: flutter build macos --release
+        working-directory: app
 
-      # --- 统一重命名产物 ---
+      # --- 重命名产物 ---
       - name: Package Android
         if: ${{ matrix.target == 'android' }}
         run: |
           mkdir -p dist
           APP_NAME=$(basename $(pwd))
-          cp build/app/outputs/flutter-apk/app-release.apk dist/${APP_NAME}-android.apk
+          cp app/build/app/outputs/flutter-apk/app-release.apk dist/${APP_NAME}-android.apk
 
       - name: Package Android TV
         if: ${{ matrix.target == 'android_tv' }}
         run: |
           mkdir -p dist
           APP_NAME=$(basename $(pwd))
-          cp build/app/outputs/flutter-apk/app-release.apk dist/${APP_NAME}-android-tv.apk
+          cp app/build/app/outputs/flutter-apk/app-release.apk dist/${APP_NAME}-android-tv.apk
 
       - name: Package Windows
         if: ${{ matrix.target == 'windows' }}
         run: |
           mkdir -p dist
           APP_NAME=$(basename $(pwd))
-          powershell Compress-Archive -Path build/windows/runner/Release/* -DestinationPath dist/${APP_NAME}-windows-x64.zip
+          powershell Compress-Archive -Path app/build/windows/runner/Release/* -DestinationPath dist/${APP_NAME}-windows-x64.zip
 
       - name: Package macOS
         if: ${{ matrix.target == 'macos' }}
         run: |
           mkdir -p dist
           APP_NAME=$(basename $(pwd))
-          zip -r dist/${APP_NAME}-macos-arm64.zip build/macos/Build/Products/Release/*.app
+          zip -r dist/${APP_NAME}-macos-arm64.zip app/build/macos/Build/Products/Release/*.app
 
-      # --- 上传产物 (Artifacts) ---
+      # --- 上传 Artifact ---
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
