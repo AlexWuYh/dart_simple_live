@@ -1,136 +1,254 @@
-name: Build All Platforms (master)
+name: app-build-action
 
 on:
-  workflow_dispatch:   # 手动触发
-  push:
-    branches:
-      - master
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（可选）'
+        required: false
+      prerelease:
+        description: '是否为预发布（true/false）'
+        required: false
 
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
-
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-22.04
-            target: android
-          - os: ubuntu-22.04
-            target: android_tv
-          - os: windows-2022
-            target: windows
-          - os: macos-14
-            target: macos
-
+  build-mac-ios-android:
+    runs-on: macos-14
+    permissions:
+      contents: write
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-
-      # --- Android 需要 JDK ---
-      - name: Set up JDK 17
-        if: ${{ matrix.target == 'android' || matrix.target == 'android_tv' }}
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
         with:
-          distribution: temurin
-          java-version: 17
+          ref: master
 
-      # --- Flutter ---
-      - name: Set up Flutter
+      # Android keystore
+      - name: Download Android keystore
+        id: android_keystore
+        uses: timheuer/base64-to-file@v1.2
+        with:
+          fileName: keystore.jks
+          encodedString: ${{ secrets.KEYSTORE_BASE64 }}
+      - name: Create key.properties
+        run: |
+          echo "storeFile=${{ steps.android_keystore.outputs.filePath }}" > simple_live_app/android/key.properties
+          echo "storePassword=${{ secrets.STORE_PASSWORD }}" >> simple_live_app/android/key.properties
+          echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> simple_live_app/android/key.properties
+          echo "keyAlias=${{ secrets.KEY_ALIAS }}" >> simple_live_app/android/key.properties
+
+      # Java & Flutter
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: "17"
+          cache: 'gradle'
+      - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.22.0'
-          channel: stable
+          flutter-version: '3.22.x'
+          cache: true
 
-      - name: Flutter pub get
+      - name: Enable Mac Desktop
+        run: flutter config --enable-macos-desktop
+
+      - name: Restore packages
         run: flutter pub get
-        working-directory: app
+        working-directory: simple_live_app
 
-      # --- Android 签名 ---
-      - name: Decode keystore (Android)
-        if: ${{ matrix.target == 'android' }}
-        run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > app/android/app/release.keystore
+      - name: Install appdmg
+        run: npm install -g appdmg
 
-      - name: Decode keystore (Android TV)
-        if: ${{ matrix.target == 'android_tv' }}
-        run: |
-          echo "${{ secrets.TV_KEYSTORE_BASE64 }}" | base64 -d > app/android_tv/app/release.keystore
+      - name: Install flutter_distributor
+        run: dart pub global activate flutter_distributor
 
-      # --- 构建 ---
-      - name: Build APK (Android)
-        if: ${{ matrix.target == 'android' }}
-        run: flutter build apk --release
-        working-directory: app
+      # Build Android APK
+      - name: Build Android APK
+        run: flutter build apk --release --split-per-abi
+        working-directory: simple_live_app
 
-      - name: Build APK (Android TV)
-        if: ${{ matrix.target == 'android_tv' }}
+      # Build Android TV APK
+      - name: Build Android TV APK
         run: flutter build apk --release -t lib/main_tv.dart
-        working-directory: app
+        working-directory: simple_live_app
 
-      - name: Build Windows EXE
-        if: ${{ matrix.target == 'windows' }}
-        run: flutter build windows --release
-        working-directory: app
-
-      - name: Build macOS APP (arm64)
-        if: ${{ matrix.target == 'macos' }}
-        run: flutter build macos --release
-        working-directory: app
-
-      # --- 重命名产物 ---
-      - name: Package Android
-        if: ${{ matrix.target == 'android' }}
-        run: |
-          mkdir -p dist
-          APP_NAME=$(basename $(pwd))
-          cp app/build/app/outputs/flutter-apk/app-release.apk dist/${APP_NAME}-android.apk
-
-      - name: Package Android TV
-        if: ${{ matrix.target == 'android_tv' }}
-        run: |
-          mkdir -p dist
-          APP_NAME=$(basename $(pwd))
-          cp app/build/app/outputs/flutter-apk/app-release.apk dist/${APP_NAME}-android-tv.apk
-
-      - name: Package Windows
-        if: ${{ matrix.target == 'windows' }}
-        run: |
-          mkdir -p dist
-          APP_NAME=$(basename $(pwd))
-          powershell Compress-Archive -Path app/build/windows/runner/Release/* -DestinationPath dist/${APP_NAME}-windows-x64.zip
-
-      - name: Package macOS
-        if: ${{ matrix.target == 'macos' }}
-        run: |
-          mkdir -p dist
-          APP_NAME=$(basename $(pwd))
-          zip -r dist/${APP_NAME}-macos-arm64.zip app/build/macos/Build/Products/Release/*.app
-
-      # --- 上传 Artifact ---
-      - name: Upload artifact
+      # Upload Android Artifacts
+      - name: Upload Android Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target }}-build
-          path: dist/*
+          name: android
+          path: |
+            simple_live_app/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+            simple_live_app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            simple_live_app/build/app/outputs/flutter-apk/app-x86_64-release.apk
+            simple_live_app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk # Android TV
 
-  release:
-    needs: build
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
+      # Build iOS IPA
+      - name: Build iOS
+        run: flutter build ios --release --no-codesign
+        working-directory: simple_live_app
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
+      - name: Create IPA
+        run: |
+          cd simple_live_app
+          mkdir -p build/ios/iphoneos/Payload
+          cp -R build/ios/iphoneos/Runner.app build/ios/iphoneos/Payload/Runner.app
+          cd build/ios/iphoneos
+          zip -q -r ios_no_sign.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: nightly-${{ github.run_number }}
-          name: "Nightly Build #${{ github.run_number }}"
-          draft: false
-          prerelease: true
+          name: ios
+          path: simple_live_app/build/ios/iphoneos/ios_no_sign.ipa
+
+      # Build MacOS ARM
+      - name: Build MacOS ARM
+        run: flutter_distributor package --platform macos --targets dmg,zip --skip-clean
+        working-directory: simple_live_app
+
+      - name: Upload MacOS
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: |
+            simple_live_app/build/dist/*/*-arm64.dmg
+            simple_live_app/build/dist/*/*-arm64.zip
+
+      # Read version
+      - name: Read version
+        id: version
+        uses: juliangruber/read-file-action@v1
+        with:
+          path: simple_live_app/assets/app_version.json
+
+      - name: Set release info
+        id: release_info
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          PRERELEASE="${{ github.event.inputs.prerelease }}"
+          if [ -z "$VERSION" ]; then
+            VERSION=$(jq -r '.version' simple_live_app/assets/app_version.json)
+          fi
+          if [ -z "$PRERELEASE" ]; then
+            PRERELEASE=$(jq -r '.prerelease' simple_live_app/assets/app_version.json)
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "prerelease=$PRERELEASE" >> $GITHUB_OUTPUT
+
+      # Upload to Release
+      - name: Upload Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: ${{ steps.release_info.outputs.version }}
+          body: "${{ fromJson(steps.version.outputs.content).version_desc }}"
+          prerelease: ${{ steps.release_info.outputs.prerelease }}
+          token: ${{ secrets.TOKEN }}
           files: |
-            artifacts/**/*.apk
-            artifacts/**/*.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            simple_live_app/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+            simple_live_app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            simple_live_app/build/app/outputs/flutter-apk/app-x86_64-release.apk
+            simple_live_app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk # Android TV
+            simple_live_app/build/ios/iphoneos/ios_no_sign.ipa
+            simple_live_app/build/dist/*/*-arm64.dmg
+            simple_live_app/build/dist/*/*-arm64.zip
+
+      - run: echo "🍏 Job status: ${{ job.status }}."
+
+  build-linux:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.22.x"
+          cache: true
+
+      - name: Update apt-get
+        run: sudo apt-get update
+      - name: Install Dependencies
+        run: sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libmpv-dev mpv
+
+      - name: Enable Linux Desktop
+        run: flutter config --enable-linux-desktop
+
+      - name: Restore Packages
+        run: flutter pub get
+        working-directory: simple_live_app
+
+      - name: Install flutter_distributor
+        run: dart pub global activate flutter_distributor
+
+      - name: Build Linux
+        run: flutter_distributor package --platform linux --targets deb,zip --skip-clean
+        working-directory: simple_live_app
+
+      - name: Upload Linux APP
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            simple_live_app/build/dist/*/*.deb
+            simple_live_app/build/dist/*/*.zip
+
+      - name: Upload Linux Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: ${{ steps.release_info.outputs.version }}
+          body: "${{ fromJson(steps.version.outputs.content).version_desc }}"
+          prerelease: ${{ steps.release_info.outputs.prerelease }}
+          token: ${{ secrets.TOKEN }}
+          files: |
+            simple_live_app/build/dist/*/*.deb
+            simple_live_app/build/dist/*/*.zip
+
+  build-windows:
+    runs-on: windows-2022
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.22.x"
+          cache: true
+
+      - name: Enable Windows Desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Restore Packages
+        run: flutter pub get
+        working-directory: simple_live_app
+
+      - name: Install flutter_distributor
+        run: dart pub global activate flutter_distributor
+
+      - name: Build Windows
+        run: flutter_distributor package --platform windows --targets msix,zip --skip-clean
+        working-directory: simple_live_app
+
+      - name: Upload Windows APP
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            simple_live_app/build/dist/*/*.msix
+            simple_live_app/build/dist/*/*.zip
+
+      - name: Upload Windows Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: ${{ steps.release_info.outputs.version }}
+          body: "${{ fromJson(steps.version.outputs.content).version_desc }}"
+          prerelease: ${{ steps.release_info.outputs.prerelease }}
+          token: ${{ secrets.TOKEN }}
+          files: |
+            simple_live_app/build/dist/*/*.msix
+            simple_live_app/build/dist/*/*.zip
