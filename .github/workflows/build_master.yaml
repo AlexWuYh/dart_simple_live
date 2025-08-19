@@ -13,23 +13,23 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             target: android
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             target: android_tv
-          - os: windows-latest
+          - os: windows-2022
             target: windows
-          - os: macos-latest
+          - os: macos-14
             target: macos
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       # --- Android 需要 JDK ---
       - name: Set up JDK 17
         if: ${{ matrix.target == 'android' || matrix.target == 'android_tv' }}
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
@@ -73,28 +73,28 @@ jobs:
         run: flutter build macos --release
 
       # --- 统一重命名产物 ---
-      - name: Rename & Package Android
+      - name: Package Android
         if: ${{ matrix.target == 'android' }}
         run: |
           mkdir -p dist
           APP_NAME=$(basename $(pwd))
           cp build/app/outputs/flutter-apk/app-release.apk dist/${APP_NAME}-android.apk
 
-      - name: Rename & Package Android TV
+      - name: Package Android TV
         if: ${{ matrix.target == 'android_tv' }}
         run: |
           mkdir -p dist
           APP_NAME=$(basename $(pwd))
           cp build/app/outputs/flutter-apk/app-release.apk dist/${APP_NAME}-android-tv.apk
 
-      - name: Rename & Package Windows
+      - name: Package Windows
         if: ${{ matrix.target == 'windows' }}
         run: |
           mkdir -p dist
           APP_NAME=$(basename $(pwd))
           powershell Compress-Archive -Path build/windows/runner/Release/* -DestinationPath dist/${APP_NAME}-windows-x64.zip
 
-      - name: Rename & Package macOS
+      - name: Package macOS
         if: ${{ matrix.target == 'macos' }}
         run: |
           mkdir -p dist
@@ -103,17 +103,17 @@ jobs:
 
       # --- 上传产物 (Artifacts) ---
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}-build
           path: dist/*
 
   release:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           path: artifacts
 
@@ -129,5 +129,3 @@ jobs:
             artifacts/**/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-
