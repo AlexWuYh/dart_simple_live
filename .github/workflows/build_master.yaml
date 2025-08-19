@@ -1,29 +1,26 @@
-name: app-build-action
+name: app-build-action-dev
 
 on:
   workflow_dispatch:
-    inputs:
-      version:
-        description: '版本号（可选）'
-        required: false
-      prerelease:
-        description: '是否为预发布（true/false）'
-        required: false
   push:
     branches:
-      - master         # master 分支 push 时触发
+      - 'master'
 
 jobs:
+  # 打包Android、iOS、Mac
   build-mac-ios-android:
-    runs-on: macos-14
+    runs-on: macos-latest
+
     permissions:
       contents: write
+
     steps:
+      # 签出代码
       - uses: actions/checkout@v4
         with:
-          ref: master
+          ref: master # 已从 dev 修改为 master
 
-      # Android keystore
+      # APK签名设置
       - name: Download Android keystore
         id: android_keystore
         uses: timheuer/base64-to-file@v1.2
@@ -37,43 +34,46 @@ jobs:
           echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> simple_live_app/android/key.properties
           echo "keyAlias=${{ secrets.KEY_ALIAS }}" >> simple_live_app/android/key.properties
 
-      # Java & Flutter
+      # 设置JAVA环境
       - uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: "17"
-          cache: 'gradle'
-      - name: Setup Flutter
+          cache: "gradle"
+
+      # 设置Flutter
+      - name: Flutter action
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.22.x'
-          cache: true
+          cache: true 
 
-      - name: Enable Mac Desktop
+      # 打开MAC Desktop支持
+      - name: Enable Flutter Desktop
         run: flutter config --enable-macos-desktop
 
+      # 更新Flutter的packages
       - name: Restore packages
-        run: flutter pub get
-        working-directory: simple_live_app
+        run: |
+          cd simple_live_app
+          flutter pub get
 
+      # 安装appdmg npm install -g appdmg
       - name: Install appdmg
         run: npm install -g appdmg
 
+      # 设置flutter_distributor环境
       - name: Install flutter_distributor
         run: dart pub global activate flutter_distributor
 
-      # Build Android APK
-      - name: Build Android APK
-        run: flutter build apk --release --split-per-abi
-        working-directory: simple_live_app
+      # 打包APK
+      - name: Build APK
+        run: |
+          cd simple_live_app
+          flutter build apk --release --split-per-abi
 
-      # Build Android TV APK
-      - name: Build Android TV APK
-        run: flutter build apk --release -t lib/main_tv.dart
-        working-directory: simple_live_app
-
-      # Upload Android Artifacts
-      - name: Upload Android Artifacts
+      #上传Artifacts
+      - name: Upload APK to Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: android
@@ -81,115 +81,116 @@ jobs:
             simple_live_app/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
             simple_live_app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
             simple_live_app/build/app/outputs/flutter-apk/app-x86_64-release.apk
-            simple_live_app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk # Android TV
 
-      # Build iOS IPA
-      - name: Build iOS
-        run: flutter build ios --release --no-codesign
-        working-directory: simple_live_app
+      # TV APK签名设置
+      - name: Download Android TV keystore
+        id: android_tv_keystore
+        uses: timheuer/base64-to-file@v1.2
+        with:
+          fileName: keystore_tv.jks
+          encodedString: ${{ secrets.TV_KEYSTORE_BASE64 }}
+      - name: Create key.properties
+        run: |
+          echo "storeFile=${{ steps.android_tv_keystore.outputs.filePath }}" > simple_live_tv_app/android/key.properties
+          echo "storePassword=${{ secrets.TV_STORE_PASSWORD }}" >> simple_live_tv_app/android/key.properties
+          echo "keyPassword=${{ secrets.TV_KEY_PASSWORD }}" >> simple_live_tv_app/android/key.properties
+          echo "keyAlias=${{ secrets.TV_KEY_ALIAS }}" >> simple_live_tv_app/android/key.properties
 
+      #打包 Android TV APK
+      - name: Build TV APK
+        run: |
+          cd simple_live_tv_app
+          flutter build apk --release --split-per-abi
+      #上传TV APK至Artifacts
+      - name: Upload TV APK to Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android_tv
+          path: |
+            simple_live_tv_app/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+            simple_live_tv_app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            simple_live_tv_app/build/app/outputs/flutter-apk/app-x86_64-release.apk
+
+      #打包iOS
+      - name: Build IPA
+        run: |
+          cd simple_live_app
+          flutter build ios --release --no-codesign
+
+      #创建未签名ipa
       - name: Create IPA
         run: |
           cd simple_live_app
           mkdir -p build/ios/iphoneos/Payload
           cp -R build/ios/iphoneos/Runner.app build/ios/iphoneos/Payload/Runner.app
-          cd build/ios/iphoneos
+          cd build/ios/iphoneos/
           zip -q -r ios_no_sign.ipa Payload
+          cd ../../..
 
-      - name: Upload IPA
+      # 上传IPA至Artifacts
+      - name: Upload IPA to Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ios
-          path: simple_live_app/build/ios/iphoneos/ios_no_sign.ipa
+          path: |
+            simple_live_app/build/ios/iphoneos/ios_no_sign.ipa
 
-      # Build MacOS ARM
-      - name: Build MacOS ARM
-        run: flutter_distributor package --platform macos --targets dmg,zip --skip-clean
-        working-directory: simple_live_app
-
-      - name: Upload MacOS
+      # 打包MAC
+      - name: Build MacOS
+        run: |
+          cd simple_live_app
+          flutter_distributor package --platform macos --targets dmg,zip --skip-clean
+      
+      # 上传MAC至Artifacts
+      - name: Upload MacOS to Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: mac
           path: |
-            simple_live_app/build/dist/*/*-arm64.dmg
-            simple_live_app/build/dist/*/*-arm64.zip
+            simple_live_app/build/dist/*/*.dmg
+            simple_live_app/build/dist/*/*.zip
+      #完成
+      - run: echo "🍏 This job's status is ${{ job.status }}."
 
-      # Read version
-      - name: Read version
-        id: version
-        uses: juliangruber/read-file-action@v1
-        with:
-          path: simple_live_app/assets/app_version.json
-
-      - name: Set release info
-        id: release_info
-        run: |
-          VERSION="${{ github.event.inputs.version }}"
-          PRERELEASE="${{ github.event.inputs.prerelease }}"
-          if [ -z "$VERSION" ]; then
-            VERSION=$(jq -r '.version' simple_live_app/assets/app_version.json)
-          fi
-          if [ -z "$PRERELEASE" ]; then
-            PRERELEASE=$(jq -r '.prerelease' simple_live_app/assets/app_version.json)
-          fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "prerelease=$PRERELEASE" >> $GITHUB_OUTPUT
-
-      # Upload to Release
-      - name: Upload Release
-        uses: softprops/action-gh-release@v1
-        with:
-          name: ${{ steps.release_info.outputs.version }}
-          body: "${{ fromJson(steps.version.outputs.content).version_desc }}"
-          prerelease: ${{ steps.release_info.outputs.prerelease }}
-          token: ${{ secrets.TOKEN }}
-          files: |
-            simple_live_app/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
-            simple_live_app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
-            simple_live_app/build/app/outputs/flutter-apk/app-x86_64-release.apk
-            simple_live_app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk # Android TV
-            simple_live_app/build/ios/iphoneos/ios_no_sign.ipa
-            simple_live_app/build/dist/*/*-arm64.dmg
-            simple_live_app/build/dist/*/*-arm64.zip
-
-      - run: echo "🍏 Job status: ${{ job.status }}."
-
+  # 打包Linux
   build-linux:
     runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
+      # 签出代码
       - uses: actions/checkout@v4
         with:
-          ref: master
-
+          ref: master # 已从 dev 修改为 master
+      # 设置Flutter环境
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: "3.22.x"
           cache: true
-
+      # 安装依赖
       - name: Update apt-get
         run: sudo apt-get update
       - name: Install Dependencies
         run: sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libmpv-dev mpv
-
-      - name: Enable Linux Desktop
+      # 打开Linux Desktop支持
+      - name: Enable Flutter Desktop
         run: flutter config --enable-linux-desktop
-
+      # 更新Flutter的packages
       - name: Restore Packages
-        run: flutter pub get
-        working-directory: simple_live_app
-
+        run: |
+          cd simple_live_app
+          flutter pub get
+      # 设置flutter_distributor环境
       - name: Install flutter_distributor
         run: dart pub global activate flutter_distributor
-
+      # build Linux ZIP\DMG
       - name: Build Linux
-        run: flutter_distributor package --platform linux --targets deb,zip --skip-clean
-        working-directory: simple_live_app
-
-      - name: Upload Linux APP
+        run: |
+          cd simple_live_app
+          flutter_distributor package --platform linux --targets deb,zip --skip-clean
+      # 上传Linux包至Artifacts
+      - name: Upload Linux APP to Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: linux
@@ -197,61 +198,193 @@ jobs:
             simple_live_app/build/dist/*/*.deb
             simple_live_app/build/dist/*/*.zip
 
-      - name: Upload Linux Release
-        uses: softprops/action-gh-release@v1
-        with:
-          name: ${{ steps.release_info.outputs.version }}
-          body: "${{ fromJson(steps.version.outputs.content).version_desc }}"
-          prerelease: ${{ steps.release_info.outputs.prerelease }}
-          token: ${{ secrets.TOKEN }}
-          files: |
-            simple_live_app/build/dist/*/*.deb
-            simple_live_app/build/dist/*/*.zip
+        #完成
+      - run: echo "🍏 Linux job's status is ${{ job.status }}."
 
+  # 打包Windows
   build-windows:
-    runs-on: windows-2022
+    runs-on: windows-latest
     permissions:
       contents: write
     steps:
+      # 签出代码
       - uses: actions/checkout@v4
         with:
-          ref: master
-
+          ref: master # 已从 dev 修改为 master
+      # 设置Flutter环境
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: "3.22.x"
           cache: true
-
-      - name: Enable Windows Desktop
+      - name: Enable Flutter Desktop
         run: flutter config --enable-windows-desktop
-
       - name: Restore Packages
-        run: flutter pub get
-        working-directory: simple_live_app
-
+        run: |
+          cd simple_live_app
+          flutter pub get
+      # 设置flutter_distributor环境
       - name: Install flutter_distributor
         run: dart pub global activate flutter_distributor
-
+      # build Windows ZIP\MSIX
       - name: Build Windows
-        run: flutter_distributor package --platform windows --targets msix,zip --skip-clean
-        working-directory: simple_live_app
-
-      - name: Upload Windows APP
+        run: |
+          cd simple_live_app
+          flutter_distributor package --platform windows --targets msix,zip --skip-clean
+      # 上传Windows至Artifacts
+      - name: Upload Windows APP to Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows
           path: |
             simple_live_app/build/dist/*/*.msix
             simple_live_app/build/dist/*/*.zip
+        #完成
+      - run: echo "🍏 Windows job's status is ${{ job.status }}."
 
-      - name: Upload Windows Release
-        uses: softprops/action-gh-release@v1
+  # 新增：创建 Release 并上传带平台+架构标识的包
+  create-release:
+    needs: [build-mac-ios-android, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # 为 gh CLI 提供权限
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
-          name: ${{ steps.release_info.outputs.version }}
-          body: "${{ fromJson(steps.version.outputs.content).version_desc }}"
-          prerelease: ${{ steps.release_info.outputs.prerelease }}
-          token: ${{ secrets.TOKEN }}
-          files: |
-            simple_live_app/build/dist/*/*.msix
-            simple_live_app/build/dist/*/*.zip
+          ref: master
+
+      # 获取当前 commit short SHA 作为版本标识
+      - name: Set version env
+        run: |
+          echo "COMMIT_SHA_SHORT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      # 创建 release
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        with:
+          tag_name: dev-build-${{ env.COMMIT_SHA_SHORT }}
+          release_name: Development Build ${{ env.COMMIT_SHA_SHORT }}
+          draft: false
+          prerelease: true
+          generate_release_notes: true
+
+      # 下载各平台构建产物
+      - name: Download Android Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: android
+          path: artifacts/android
+
+      - name: Download TV Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: android_tv
+          path: artifacts/android_tv
+
+      - name: Download iOS Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ios
+          path: artifacts/ios
+
+      - name: Download Mac Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: mac
+          path: artifacts/mac
+
+      - name: Download Linux Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linux
+          path: artifacts/linux
+
+      - name: Download Windows Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows
+          path: artifacts/windows
+
+      # 重命名并上传带平台+架构的包
+      - name: Prepare and Upload Android APKs
+        run: |
+          cd artifacts/android
+          for file in *.apk; do
+            if [[ "$file" == *"armeabi-v7a"* ]]; then
+              mv "$file" "simple_live_app-android-arm32-release.apk"
+              gh release upload ${{ steps.create_release.outputs.id }} "simple_live_app-android-arm32-release.apk" --clobber
+            elif [[ "$file" == *"arm64-v8a"* ]]; then
+              mv "$file" "simple_live_app-android-arm64-release.apk"
+              gh release upload ${{ steps.create_release.outputs.id }} "simple_live_app-android-arm64-release.apk" --clobber
+            elif [[ "$file" == *"x86_64"* ]]; then
+              mv "$file" "simple_live_app-android-x64-release.apk"
+              gh release upload ${{ steps.create_release.outputs.id }} "simple_live_app-android-x64-release.apk" --clobber
+            fi
+          done
+
+      - name: Prepare and Upload TV APKs
+        run: |
+          cd artifacts/android_tv
+          for file in *.apk; do
+            if [[ "$file" == *"armeabi-v7a"* ]]; then
+              mv "$file" "simple_live_tv_app-android-arm32-release.apk"
+              gh release upload ${{ steps.create_release.outputs.id }} "simple_live_tv_app-android-arm32-release.apk" --clobber
+            elif [[ "$file" == *"arm64-v8a"* ]]; then
+              mv "$file" "simple_live_tv_app-android-arm64-release.apk"
+              gh release upload ${{ steps.create_release.outputs.id }} "simple_live_tv_app-android-arm64-release.apk" --clobber
+            elif [[ "$file" == *"x86_64"* ]]; then
+              mv "$file" "simple_live_tv_app-android-x64-release.apk"
+              gh release upload ${{ steps.create_release.outputs.id }} "simple_live_tv_app-android-x64-release.apk" --clobber
+            fi
+          done
+
+      - name: Upload iOS IPA
+        run: |
+          cd artifacts/ios
+          mv ios_no_sign.ipa simple_live_app-ios-universal-release.ipa
+          gh release upload ${{ steps.create_release.outputs.id }} simple_live_app-ios-universal-release.ipa --clobber
+
+      - name: Upload Mac Packages
+        run: |
+          cd artifacts/mac
+          for file in *; do
+            if [[ "$file" == *.dmg ]]; then
+              mv "$file" "simple_live_app-macos-universal.dmg"
+              gh release upload ${{ steps.create_release.outputs.id }} "simple_live_app-macos-universal.dmg" --clobber
+            elif [[ "$file" == *.zip ]]; then
+              mv "$file" "simple_live_app-macos-universal.zip"
+              gh release upload ${{ steps.create_release.outputs.id }} "simple_live_app-macos-universal.zip" --clobber
+            fi
+          done
+
+      - name: Upload Linux Packages
+        run: |
+          cd artifacts/linux
+          for file in *; do
+            if [[ "$file" == *.deb ]]; then
+              # 假设构建在 x64 上
+              mv "$file" "simple_live_app-linux-x64.deb"
+              gh release upload ${{ steps.create_release.outputs.id }} "simple_live_app-linux-x64.deb" --clobber
+            elif [[ "$file" == *.zip ]]; then
+              mv "$file" "simple_live_app-linux-x64.zip"
+              gh release upload ${{ steps.create_release.outputs.id }} "simple_live_app-linux-x64.zip" --clobber
+            fi
+          done
+
+      - name: Upload Windows Packages
+        run: |
+          cd artifacts/windows
+          for file in *; do
+            if [[ "$file" == *.msix ]]; then
+              mv "$file" "simple_live_app-windows-x64.msix"
+              gh release upload ${{ steps.create_release.outputs.id }} "simple_live_app-windows-x64.msix" --clobber
+            elif [[ "$file" == *.zip ]]; then
+              mv "$file" "simple_live_app-windows-x64.zip"
+              gh release upload ${{ steps.create_release.outputs.id }} "simple_live_app-windows-x64.zip" --clobber
+            fi
+          done
